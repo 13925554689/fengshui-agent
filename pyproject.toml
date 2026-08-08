@@ -1,0 +1,12 @@
+[project]
+name = "mingli-ai"
+version = "0.1.0"
+description = "Add your description here"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.139.2",
+    "lunar-python>=1.4.8",
+    "openai>=2.46.0",
+    "python-dotenv>=1.2.2",
+    "uvicorn>=0.51.0",
+]

@@ -58,6 +58,7 @@ class BaZiChart:
     da_yun: list[DaYunStep]
     # 当前流年
     current_liu_nian: Optional[dict] = None
+    solar_time_note: Optional[str] = None  # 真太阳时换算说明（提供经度时才有）
 
 
 # lunar-python uses 'Time' not 'Hour' for the hour pillar
@@ -107,10 +108,48 @@ def _count_wu_xing(pillars: list[Pillar]) -> dict:
     return score
 
 
+def true_solar_time(year: int, month: int, day: int, hour: int, minute: int, longitude: float):
+    """真太阳时 = 标准时 + (经度 - 120°)×4分钟 + 均时差。
+
+    Spencer 均时差公式，精度 ±0.5 分钟，足够时柱判定。
+    返回 (year, month, day, hour, minute)：TST 回退到前一天时日期一并回退。
+    """
+    import math
+    import datetime
+    # 平天文日序数（含闰年规则的简化年长 365）
+    gamma = 2 * math.pi / 365 * (dayofyear(year, month, day) - 1 + (hour - 12) / 24)
+    eq_time = 229.18 * (
+        0.000075
+        + 0.001868 * math.cos(gamma)
+        - 0.032077 * math.sin(gamma)
+        - 0.014615 * math.cos(2 * gamma)
+        - 0.040849 * math.sin(2 * gamma)
+    )  # 分钟
+    total_min = hour * 60 + minute + (longitude - 120.0) * 4 + eq_time
+    total_rounded = int(round(total_min))  # 单一取整点：先四舍五入再拆时分，防 x:59.5+ 截断翻转时柱
+    date_offset = 0
+    if total_rounded < 0:      # 回退到前一天
+        date_offset = -1
+    elif total_rounded >= 1440:  # 推进到次日（西经）→ ponytail: 当前用户均为东经，此分支防御性保留
+        date_offset = 1
+    base = datetime.date(year, month, day) + datetime.timedelta(days=date_offset)
+    norm = total_rounded % 1440
+    return base.year, base.month, base.day, norm // 60, norm % 60
+
+
+def dayofyear(year: int, month: int, day: int) -> int:
+    cum = (0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334)
+    doy = cum[month - 1] + day
+    if month > 2 and (year % 4 == 0 and (year % 100 != 0 or year % 400 == 0)):
+        doy += 1
+    return doy
+
+
 def compute_bazi(
     year: int, month: int, day: int,
     hour: int = 0, minute: int = 0,
-    sex: int = 1  # 1=男, 0=女
+    sex: int = 1,  # 1=男, 0=女
+    longitude: Optional[float] = None,  # 东经度数；提供则按真太阳时排盘
 ) -> BaZiChart:
     """
     计算八字命盘。
@@ -122,11 +161,22 @@ def compute_bazi(
         hour: 小时 (0-23)
         minute: 分钟
         sex: 1=男, 0=女
+        longitude: 出生地东经度数（如北京 116.4、乌鲁木齐 87.6）。
+                   提供时先将东八区钟表时换算为真太阳时再定时柱（含跨午夜日期回退）。
+                   仅适用于中国境内钟表时；境外时区出生请先自行换算为北京时间。
 
     Returns:
         BaZiChart 完整命盘
     """
-    solar = Solar.fromYmdHms(year, month, day, hour, minute, 0)
+    tst_hour, tst_minute = hour, minute
+    tst_date = (year, month, day)
+    solar_time_note = None
+    if longitude is not None:
+        tst_year, tst_month, tst_day, tst_hour, tst_minute = true_solar_time(year, month, day, hour, minute, longitude)
+        tst_date = (tst_year, tst_month, tst_day)
+        solar_time_note = f"真太阳时 {tst_year:04d}-{tst_month:02d}-{tst_day:02d} {tst_hour:02d}:{tst_minute:02d} (经度{longitude}°, 钟表时 {year:04d}-{month:02d}-{day:02d} {hour:02d}:{minute:02d})"
+
+    solar = Solar.fromYmdHms(tst_date[0], tst_date[1], tst_date[2], tst_hour, tst_minute, 0)
     lunar = solar.getLunar()
     ba = lunar.getEightChar()
 
@@ -188,6 +238,7 @@ def compute_bazi(
         qi_yun_age=qi_yun,
         da_yun=da_yun_steps,
         current_liu_nian=current_ln,
+        solar_time_note=solar_time_note,
     )
     return chart
 
@@ -197,6 +248,8 @@ def chart_to_text(chart: BaZiChart) -> str:
     lines = []
     lines.append(f"## 八字命盘")
     lines.append(f"公历: {chart.solar_date}")
+    if chart.solar_time_note:
+        lines.append(f"时辰校正: {chart.solar_time_note}")
     lines.append(f"农历: {chart.lunar_date}")
     lines.append(f"性别: {chart.sex}")
     lines.append("")
@@ -242,6 +295,7 @@ def chart_to_json(chart: BaZiChart) -> dict:
         })
     return {
         "solar_date": chart.solar_date,
+        "solar_time_note": chart.solar_time_note,
         "lunar_date": chart.lunar_date,
         "sex": chart.sex,
         "bazi": {

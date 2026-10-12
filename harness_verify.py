@@ -76,6 +76,24 @@ try:
     t = chart_to_text(chart)
     assert "庚子" in t and "偏印" in t
     print("  ✓ JSON/Text 导出正确")
+
+    # 真太阳时：无 longitude 不注入 note（向后兼容）
+    assert chart.solar_time_note is None
+    assert "时辰校正" not in t
+
+    # 有 longitude：常规点校正 + note 注入
+    c2 = compute_bazi(1990, 6, 15, 15, 10, 1, longitude=104.1)
+    assert c2.hour.gan_zhi == "乙未", f"BAD tst hour: {c2.hour.gan_zhi}"
+    assert c2.solar_time_note and "14:06" in c2.solar_time_note
+    assert "时辰校正" in chart_to_text(c2)
+    assert chart_to_json(c2)["solar_time_note"]
+
+    # 跨午夜：TST 回退前一天，日柱随之变化（乌鲁木齐 00:30 -> 前日 22:34）
+    c3 = compute_bazi(1988, 10, 12, 0, 30, 1, longitude=87.6)
+    assert c3.day.gan_zhi == "己亥", f"BAD cross-midnight day: {c3.day.gan_zhi}"
+    assert c3.hour.gan_zhi == "乙亥", f"BAD cross-midnight hour: {c3.hour.gan_zhi}"
+    assert "1988-10-11" in c3.solar_time_note
+    print("  ✓ 真太阳时（常规/跨午夜回退日期）")
     BAZI_OK = True
 except ImportError:
     print("  ⚠ lunar-python 未安装 (仅系统Python)，跳过")

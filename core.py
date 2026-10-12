@@ -39,6 +39,7 @@ TOOLS = [
                     "hour": {"type": "integer", "description": "出生小时(0-23)", "default": 0},
                     "minute": {"type": "integer", "description": "出生分钟(0-59)", "default": 0},
                     "sex": {"type": "integer", "description": "性别: 1=男, 0=女", "default": 1},
+                    "longitude": {"type": "number", "description": "出生地东经度数(如北京116.4、上海121.5、成都104.1)。按东八区钟表时+真太阳时校正时柱；仅适用于中国境内出生时间", "default": None},
                 },
                 "required": ["year", "month", "day", "hour", "sex"]
             }
@@ -93,14 +94,14 @@ TOOLS = [
 
 # ── Tool Implementations ─────────────────────────────────────
 
-def tool_compute_bazi(year, month, day, hour=0, minute=0, sex=1):
-    """计算八字命盘"""
-    chart = compute_bazi(year, month, day, hour, minute, sex)
+def tool_compute_bazi(year, month, day, hour=0, minute=0, sex=1, longitude=None):
+    """计算八字命盘（提供 longitude 时按真太阳时校正时柱）"""
+    chart = compute_bazi(year, month, day, hour, minute, sex, longitude=longitude)
     return chart, chart_to_text(chart)
 
 
 def tool_search_knowledge(query):
-    """ripgrep 搜索知识库"""
+    """ripgrep 搜索知识库（简体查询自动附加繁体变体，古籍库为繁体）"""
     try:
         result = subprocess.run(
             # P0 fix: `--` 终止 flag 解析, 防 query 注入 rg 参数 (如 --files/-e)
@@ -112,7 +113,7 @@ def tool_search_knowledge(query):
             # 截取前20条
             return "\n".join(lines[:20])
         elif result.returncode == 1:
-            return "(未找到匹配内容)"
+            return _search_traditional_fallback(query)
         else:
             return f"(搜索错误: {result.stderr})"
     except FileNotFoundError:
@@ -124,15 +125,48 @@ def tool_search_knowledge(query):
             )
             if result.returncode == 0:
                 return "\n".join(result.stdout.strip().split("\n")[:20])
-            return "(未找到匹配内容)"
+            return _search_traditional_fallback(query)
         except Exception as e:
             return f"(搜索失败: {e})"
 
 
+# ponytail: 逐字映射表覆盖检索常用字，够用且零依赖；全字表升级用 opencc
+_S2T = {"经": "經", "书": "書", "阴": "陰", "阳": "陽", "龙": "龍", "风": "風",
+        "水": "水", "山": "山", "宅": "宅", "门": "門", "灶": "竈", "运": "運",
+        "盘": "盤", "卦": "卦", "星": "星", "气": "氣", "灵": "靈", "宝": "寶",
+        "传": "傳", "记": "記", "历": "曆", "时": "時", "岁": "歲"}
+
+
+def _s2t(text: str) -> str:
+    return "".join(_S2T.get(ch, ch) for ch in text)
+
+
+def _search_traditional_fallback(query: str) -> str:
+    """简体零命中时用繁体变体重试（古籍库为繁体）"""
+    t = _s2t(query)
+    if t == query:
+        return "(未找到匹配内容)"
+    cmd = ["rg", "-n", "-i", "--", t, str(KNOWLEDGE_DIR)]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+    except FileNotFoundError:  # rg 不在 PATH 时同主路径降级 grep
+        result = subprocess.run(["grep", "-r", "-n", "-i", t, str(KNOWLEDGE_DIR)],
+                                capture_output=True, text=True, timeout=5)
+    if result.returncode == 0:
+        lines = result.stdout.strip().split("\n")
+        return "\n".join(lines[:20])
+    return "(未找到匹配内容)"
+
+
 def tool_read_knowledge(filename):
-    """读取知识库文件"""
+    """读取知识库文件（含 classics/ 子目录）"""
     safe_name = os.path.basename(filename)  # 防路径遍历
     filepath = KNOWLEDGE_DIR / safe_name
+    if not filepath.exists():
+        # 知识文件不存在时扫子目录（classics/ 等）
+        for p in KNOWLEDGE_DIR.rglob(safe_name):
+            filepath = p
+            break
     if filepath.exists():
         return filepath.read_text(encoding="utf-8")
     return f"(文件不存在: {safe_name})"
@@ -162,7 +196,9 @@ SYSTEM_PROMPT = """你是一位精通八字命理与风水的AI命理风水师�
    - 风水分析 → 调用 fengshui_analysis
 2. **指着盘面说话**: 每个结论都要引用具体的盘面数据（某柱某神、五行分布、飞星方位等），不说放诸四海皆准的"巴纳姆废话"。
 3. **知识溯源**: 使用 search_knowledge 检索专业规则，引用规则再给结论。
-4. **坦承局限**: 命理与风水是传统文化智慧，提供的是参考而非绝对预言。遇到不确定的地方要诚实说明。
+   - knowledge/classics/ 目录收录11篇公版古籍繁体原文（理气：青囊經/天玉經/都天寶照經；巒頭：撼龍經/靈城精義/葬書；八宅：八宅明鏡/陽宅三要），涉及理气、峦头、葬法、门主灶等论断时检索并注明出处（如"《天玉經》云：…"）。检索时用繁体关键词（经→經、书→書）。
+4. **流派透明**: 每个风水结论注明所用流派（八宅/玄空飞星/峦头形势）。不同流派结论冲突时明确指出"八宅主吉、玄空主忌"这类分歧，不混为一谈、不 averaging 和稀泥；八宅断门主灶（引《阳宅三要》《八宅明镜》），玄空断宅运飞星，峦头断形煞，各归其位。
+5. **坦承局限**: 命理与风水是传统文化智慧，提供的是参考而非绝对预言。遇到不确定的地方要诚实说明。
 
 ## 分析框架
 ### 八字分析

@@ -32,6 +32,7 @@ class BirthInfo(BaseModel):
     hour: int = 0
     minute: int = 0
     sex: int = 1  # 1=男, 0=女
+    longitude: Optional[float] = None  # 出生地东经度数，提供则真太阳时校正时柱
 
 
 class AnalyzeRequest(BaseModel):
@@ -54,7 +55,8 @@ async def health():
 async def compute_chart(birth: BirthInfo):
     """仅计算命盘，返回 JSON"""
     chart = compute_bazi(birth.year, birth.month, birth.day, 
-                         birth.hour, birth.minute, birth.sex)
+                         birth.hour, birth.minute, birth.sex,
+                         longitude=birth.longitude)
     return chart_to_json(chart)
 
 
@@ -62,7 +64,8 @@ async def compute_chart(birth: BirthInfo):
 async def analyze(req: AnalyzeRequest):
     """完整分析：计算命盘 + AI 解读"""
     chart = compute_bazi(req.birth.year, req.birth.month, req.birth.day,
-                         req.birth.hour, req.birth.minute, req.birth.sex)
+                         req.birth.hour, req.birth.minute, req.birth.sex,
+                         longitude=req.birth.longitude)
 
     question = req.question or "请全面分析此八字命盘，包括日主强弱、五行平衡、用神建议、大运走势和当前流年分析。"
 

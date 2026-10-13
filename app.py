@@ -164,6 +164,9 @@ def cli_mode():
                 y, m, d, h = int(parts[0]), int(parts[1]), int(parts[2]), int(parts[3])
                 sex = int(parts[4]) if len(parts) > 4 else 1
                 lon = float(parts[5]) if len(parts) > 5 else None  # 可选: 东经度
+                if lon is not None and not (-180 <= lon <= 180):
+                    print(f"⚠ 经度 {lon} 超出 [-180,180]，忽略校正")
+                    lon = None
                 chart = compute_bazi(y, m, d, h, 0, sex, longitude=lon)
                 chart_md = chart_to_text(chart)
                 print(f"\n{chart_md}")
@@ -175,7 +178,7 @@ def cli_mode():
                 result = agent.analyze(full_input)
                 print(result)
                 continue
-            except ValueError:
+            except (ValueError, OverflowError):  # ponytail: inf/1e308 走 OverflowError, 与非法输入同路回落
                 pass
 
         # 追问模式

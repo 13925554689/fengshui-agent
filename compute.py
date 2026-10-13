@@ -130,7 +130,7 @@ def true_solar_time(year: int, month: int, day: int, hour: int, minute: int, lon
     date_offset = 0
     if total_rounded < 0:      # 回退到前一天
         date_offset = -1
-    elif total_rounded >= 1440:  # 推进到次日（西经）→ ponytail: 当前用户均为东经，此分支防御性保留
+    elif total_rounded >= 1440:  # 跨午夜推进次日（东经>120°深夜 / 西经同样适用）
         date_offset = 1
     base = datetime.date(year, month, day) + datetime.timedelta(days=date_offset)
     norm = total_rounded % 1440

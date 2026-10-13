@@ -132,7 +132,7 @@ def cli_mode():
     print("\n" + "=" * 50)
     print("   🔮 命理AI — 八字命理分析 Agent")
     print("=" * 50)
-    print("输入出生信息开始，格式: 年 月 日 时 性别(1男0女)")
+    print("输入出生信息开始，格式: 年 月 日 时 性别(1男0女) [东经度]，如: 1990 5 15 8 1 116.4")
     print("例如: 1990 5 15 8 1")
     print("直接输入问题可对已排盘追问")
     print("输入 /new 重新排盘, /quit 退出")
@@ -163,7 +163,8 @@ def cli_mode():
             try:
                 y, m, d, h = int(parts[0]), int(parts[1]), int(parts[2]), int(parts[3])
                 sex = int(parts[4]) if len(parts) > 4 else 1
-                chart = compute_bazi(y, m, d, h, 0, sex)
+                lon = float(parts[5]) if len(parts) > 5 else None  # 可选: 东经度
+                chart = compute_bazi(y, m, d, h, 0, sex, longitude=lon)
                 chart_md = chart_to_text(chart)
                 print(f"\n{chart_md}")
 

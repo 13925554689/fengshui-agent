@@ -108,6 +108,29 @@ def _count_wu_xing(pillars: list[Pillar]) -> dict:
     return score
 
 
+# 中国夏令时 1986-1991：逐年国务院通知日期（无统一周日规则，勿按规律推算）；
+# 窗口=起始日02:00(含)至结束日02:00(排)，与 tzdb Asia/Shanghai 一致。
+# 仅覆盖 1986-1991；1940-1949 另有零散夏令时未处理，排祖辈盘需人工核。ponytail: 边界重复小时无 fold 输入，按首解(DST)
+_CHINA_DST_WINDOWS = (
+    ((1986, 5, 4, 2, 0), (1986, 9, 14, 2, 0)),
+    ((1987, 4, 12, 2, 0), (1987, 9, 13, 2, 0)),
+    ((1988, 4, 17, 2, 0), (1988, 9, 11, 2, 0)),
+    ((1989, 4, 16, 2, 0), (1989, 9, 17, 2, 0)),
+    ((1990, 4, 15, 2, 0), (1990, 9, 16, 2, 0)),
+    ((1991, 4, 14, 2, 0), (1991, 9, 15, 2, 0)),
+)
+
+
+def in_china_dst(year: int, month: int, day: int, hour: int = 0, minute: int = 0) -> bool:
+    """钟表时是否落在 1986-1991 中国夏令时窗口内。"""
+    import datetime
+    t = datetime.datetime(year, month, day, hour, minute)
+    for start, end in _CHINA_DST_WINDOWS:
+        if datetime.datetime(*start) <= t < datetime.datetime(*end):
+            return True
+    return False
+
+
 def true_solar_time(year: int, month: int, day: int, hour: int, minute: int, longitude: float):
     """真太阳时 = 标准时 + (经度 - 120°)×4分钟 + 均时差。
 
@@ -168,13 +191,24 @@ def compute_bazi(
     Returns:
         BaZiChart 完整命盘
     """
+    solar_time_note = None
+    dst_note = None
+    # 中国夏令时(1986-1991)：钟表时先扣1h还原标准时（所有后续换算的单一入口）
+    orig_clock = (year, month, day, hour, minute)  # 用户输入的钟表时，note 保留原始值
+    import datetime as _dt
+    if in_china_dst(year, month, day, hour, minute):
+        _t = _dt.datetime(year, month, day, hour, minute) - _dt.timedelta(hours=1)
+        year, month, day, hour, minute = _t.year, _t.month, _t.day, _t.hour, _t.minute
+        dst_note = f"钟表时 {orig_clock[0]:04d}-{orig_clock[1]:02d}-{orig_clock[2]:02d} {orig_clock[3]:02d}:{orig_clock[4]:02d} 已扣中国夏令时1小时→标准时 {year:04d}-{month:02d}-{day:02d} {hour:02d}:{minute:02d}"
     tst_hour, tst_minute = hour, minute
     tst_date = (year, month, day)
-    solar_time_note = None
     if longitude is not None:
         tst_year, tst_month, tst_day, tst_hour, tst_minute = true_solar_time(year, month, day, hour, minute, longitude)
         tst_date = (tst_year, tst_month, tst_day)
-        solar_time_note = f"真太阳时 {tst_year:04d}-{tst_month:02d}-{tst_day:02d} {tst_hour:02d}:{tst_minute:02d} (经度{longitude}°, 钟表时 {year:04d}-{month:02d}-{day:02d} {hour:02d}:{minute:02d})"
+        base_note = f"真太阳时 {tst_year:04d}-{tst_month:02d}-{tst_day:02d} {tst_hour:02d}:{tst_minute:02d} (经度{longitude}°)"
+        solar_time_note = f"{base_note}; {dst_note}" if dst_note else f"{base_note}, 钟表时 {year:04d}-{month:02d}-{day:02d} {hour:02d}:{minute:02d}"
+    elif dst_note:
+        solar_time_note = dst_note
 
     solar = Solar.fromYmdHms(tst_date[0], tst_date[1], tst_date[2], tst_hour, tst_minute, 0)
     lunar = solar.getLunar()

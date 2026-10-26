@@ -53,7 +53,7 @@ print("  ✓ fengshui_to_text 完整")
 # ── HAR-02: 八字排盘 (lunar-python) ──
 print("\n━ HAR-02: compute.py (八字排盘)")
 try:
-    from compute import compute_bazi, chart_to_text, chart_to_json
+    from compute import compute_bazi, chart_to_text, chart_to_json, in_china_dst
     chart = compute_bazi(1988, 10, 12, 8, 0, 1)
 
     # 基础字段
@@ -84,9 +84,22 @@ try:
     # 有 longitude：常规点校正 + note 注入
     c2 = compute_bazi(1990, 6, 15, 15, 10, 1, longitude=104.1)
     assert c2.hour.gan_zhi == "乙未", f"BAD tst hour: {c2.hour.gan_zhi}"
-    assert c2.solar_time_note and "14:06" in c2.solar_time_note
+    assert c2.solar_time_note and "13:06" in c2.solar_time_note, c2.solar_time_note
+    assert "15:10" in c2.solar_time_note and "已扣中国夏令时" in c2.solar_time_note, c2.solar_time_note  # 原始钟表时 15:10 必须保留
     assert "时辰校正" in chart_to_text(c2)
     assert chart_to_json(c2)["solar_time_note"]
+
+    # 夏令时：无 longitude 也注入扣除提示
+    c_dst = compute_bazi(1988, 6, 20, 3, 30, 1)
+    assert c_dst.solar_time_note and "已扣中国夏令时" in c_dst.solar_time_note, c_dst.solar_time_note
+    assert "03:30" in c_dst.solar_time_note  # 原始钟表时保留
+    assert c_dst.hour.zhi == "丑"  # 扣1h后=标准时2:30→丑时(1-3点)
+
+    # 夏令时边界：1988 起始日=4月17日（tzdb 口径），4月16日不在窗口
+    assert not in_china_dst(1988, 4, 16, 12, 0)
+    assert in_china_dst(1988, 4, 17, 2, 0)
+    assert not in_china_dst(1986, 5, 4, 1, 59) and in_china_dst(1986, 5, 4, 2, 0)
+    assert in_china_dst(1986, 9, 14, 1, 59) and not in_china_dst(1986, 9, 14, 2, 0)
 
     # 跨午夜：TST 回退前一天，日柱随之变化（乌鲁木齐 00:30 -> 前日 22:34）
     c3 = compute_bazi(1988, 10, 12, 0, 30, 1, longitude=87.6)

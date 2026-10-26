@@ -5,6 +5,7 @@ description = "Add your description here"
 requires-python = ">=3.11"
 dependencies = [
     "fastapi>=0.139.2",
+    "pydantic>=2.14",
     "lunar-python>=1.4.8",
     "openai>=2.46.0",
     "python-dotenv>=1.2.2",

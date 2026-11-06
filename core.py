@@ -17,6 +17,7 @@ from config import (
 )
 from compute import compute_bazi, chart_to_text
 from fengshui_compute import fengshui_analysis, fengshui_to_text
+from ziwei_lookup import lookup_ziwei_reading, DIMS
 
 # ── LLM Client ──────────────────────────────────────────────
 client = OpenAI(api_key=DEEPSEEK_API_KEY, base_url=DEEPSEEK_BASE_URL)
@@ -86,6 +87,25 @@ TOOLS = [
                     "analysis_year": {"type": "integer", "description": "分析年份, 默认当前年"},
                 },
                 "required": ["facing", "residents"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "lookup_ziwei_reading",
+            "description": "紫微斗数深度解读查询（v4.0数据集67.5万命盘精确匹配，按出生信息命中同一命盘的现成解读）。13个维度：命格总览/性格/感情/事业/财运/健康/兄弟/子女/迁移/人际/田宅/福德/父母，每维约1-4千字。一次取一维(dim='all'返回13维各200字总览)；想看某领域全文就用对应dim调用。适用：用户要紫微视角解读、或想深入某一生活领域。注意：晚子时(23点)按次日排盘；其余钟表小时直接归时辰。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "year": {"type": "integer", "description": "出生公历年(1950-2026)"},
+                    "month": {"type": "integer", "description": "出生公历月(1-12)"},
+                    "day": {"type": "integer", "description": "出生公历日"},
+                    "hour": {"type": "integer", "description": "出生钟表小时(0-23), 按钟表时归时辰"},
+                    "gender": {"type": "string", "description": "性别: male/female(或男/女)"},
+                    "dim": {"type": "string", "description": "解读维度: " + ", ".join(DIMS) + " 或 all (默认 overview)", "default": "overview"},
+                },
+                "required": ["year", "month", "day", "hour", "gender"]
             }
         }
     },
@@ -197,6 +217,7 @@ TOOL_MAP = {
     "search_knowledge": tool_search_knowledge,
     "read_knowledge_file": tool_read_knowledge,
     "fengshui_analysis": tool_fengshui,
+    "lookup_ziwei_reading": lookup_ziwei_reading,
 }
 
 
@@ -208,6 +229,7 @@ SYSTEM_PROMPT = """你是一位精通八字命理与风水的AI命理风水师�
 1. **先算后说**: 分析前必须调用工具获取准确数据，绝不可凭空编造。
    - 八字分析 → 调用 compute_bazi_chart
    - 风水分析 → 调用 fengshui_analysis
+   - 紫微深度解读 → 调用 lookup_ziwei_reading（按出生信息精确命中67.5万命盘数据集的现成13维解读；引用时注明数据来源 ziwei-doushu v4.0，CC BY 4.0）
 2. **指着盘面说话**: 每个结论都要引用具体的盘面数据（某柱某神、五行分布、飞星方位等），不说放诸四海皆准的"巴纳姆废话"。
 3. **知识溯源**: 使用 search_knowledge 检索专业规则，引用规则再给结论。
    - knowledge/classics/ 目录收录11篇公版古籍原文（繁简混录）（理气：青囊經/天玉經/都天寶照經；巒頭：撼龍經/靈城精義/葬書；八宅：八宅明鏡/陽宅三要），涉及理气、峦头、葬法、门主灶等论断时检索并注明出处（如"《天玉經》云：…"）。检索词简繁均可（系统自动变体重试）。
@@ -283,6 +305,26 @@ class MingLiAgent:
                     total -= _len(removed)
                     break
 
+    def _dispatch_tool(self, tc):
+        """工具派发统一入口: JSON解析+调用+异常降级(两处ReAct循环共用)。
+        ponytail: LLM参数畸形(TypeError/OverflowError/坏JSON)降级为字符串返回,
+        让 LLM 自纠, 不毁整轮 ReAct。"""
+        fn_name = "?"
+        try:
+            fn_name = tc["function"]["name"]
+            fn_args = _json.loads(tc["function"]["arguments"])
+            fn = TOOL_MAP.get(fn_name)
+            if fn is None:
+                return f"未知工具: {fn_name}"
+            if fn_name == "compute_bazi_chart":
+                chart, chart_text = fn(**fn_args)
+                self.chart = chart
+                self.chart_text = chart_text
+                return chart_text
+            return fn(**fn_args)
+        except Exception as e:
+            return f"(工具 {fn_name} 失败: {type(e).__name__}: {e})"
+
     def analyze(self, user_input: str) -> str:
         """
         分析用户输入。支持两种模式：
@@ -306,24 +348,12 @@ class MingLiAgent:
             self.messages.append(msg)
 
             # 无工具调用 → 最终回答
-            if not msg["tool_calls"]:
+            if not msg.get("tool_calls"):
                 return msg["content"] or ""
 
             # 执行工具调用
             for tc in msg["tool_calls"]:
-                fn_name = tc["function"]["name"]
-                fn_args = _json.loads(tc["function"]["arguments"])
-                fn = TOOL_MAP.get(fn_name)
-
-                if fn is None:
-                    result = f"未知工具: {fn_name}"
-                elif fn_name == "compute_bazi_chart":
-                    chart, chart_text = fn(**fn_args)
-                    self.chart = chart
-                    self.chart_text = chart_text
-                    result = chart_text
-                else:
-                    result = fn(**fn_args)
+                result = self._dispatch_tool(tc)
 
                 self.messages.append({
                     "role": "tool",
@@ -352,24 +382,12 @@ class MingLiAgent:
                                       for tc in msg.tool_calls]} if msg.tool_calls else {})}
             self.messages.append(msg)
 
-            if not msg.tool_calls:
-                yield msg.content or ""
+            if not msg.get("tool_calls"):
+                yield msg.get("content") or ""
                 return
 
-            for tc in msg.tool_calls:
-                fn_name = tc.function.name
-                fn_args = _json.loads(tc.function.arguments)
-                fn = TOOL_MAP.get(fn_name)
-
-                if fn is None:
-                    result = f"未知工具: {fn_name}"
-                elif fn_name == "compute_bazi_chart":
-                    chart, chart_text = fn(**fn_args)
-                    self.chart = chart
-                    self.chart_text = chart_text
-                    result = chart_text
-                else:
-                    result = fn(**fn_args)
+            for tc in msg.get("tool_calls", []):
+                result = self._dispatch_tool(tc)
 
                 self.messages.append({
                     "role": "tool",
